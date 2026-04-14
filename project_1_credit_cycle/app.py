@@ -1,6 +1,7 @@
 import streamlit as st
 import matplotlib.pyplot as plt
-from utils import get_credit_to_gdp, compute_credit_gap, add_ews_flag
+from utils import get_credit_to_gdp, compute_credit_gap, add_ews_flag, run_forecast
+import pandas as pd
 
 # ======================
 # PAGE CONFIG
@@ -16,7 +17,7 @@ st.set_page_config(
 st.sidebar.header("📊 Dashboard Controls")
 
 country = st.sidebar.selectbox(
-    "Country", ["IDN", "MYS", "THA", "PHL", "VNM"]
+    "Country", ["IDN", "MYS", "THA", "PHL", "VNM", "SGP", "BRN", "LAO", "MMR", "KHM"]
 )
 
 year_range = st.sidebar.slider(
@@ -40,6 +41,19 @@ st.markdown("""
 Dashboard untuk monitoring risiko sistem keuangan berbasis:
 - Credit-to-GDP Gap (BIS)
 - Early Warning Signal (EWS)
+
+Menteri Keuangan Purbaya Yudhi Sadewa pada akhir 2025 hingga awal 2026 
+menempatkan dan mengelola uang negara (Saldo Anggaran Lebih/SAL) 
+senilai ratusan triliun rupiah di bank-bank Himbara (BRI, BNI, Mandiri, BTN, BSI). 
+Kebijakan ini bertujuan meningkatkan likuiditas perbankan, mendorong penyaluran kredit, 
+dan menggerakkan ekonomi riil.
+
+Proyek Macro-Financial Early Warning System (EWS) Dashboard ini dirancang untuk 
+menjembatani kebutuhan antara kebijakan ekspansi kredit dan mitigasi risiko sistemik. 
+Pentingnya dashboard ini semakin nyata jika dikaitkan dengan kebijakan Menteri Keuangan, Purbaya Yudhi Sadewa.
+1. **Monitoring Dampak Injeksi Likuiditas**: Kebijakan Menkeu Purbaya bertujuan untuk memastikan likuiditas perbankan melimpah agar penyaluran kredit ke sektor riil bisa dipacu hingga mencapai target 10%. Dashboard ini berperan untuk memantau apakah injeksi likuiditas tersebut benar-benar terserap secara produktif atau justru menciptakan excessive credit yang berbahaya.
+2. **Analisis Credit-to-GDP Gap Akibat Stimulus**: Dengan mengalirnya dana pemerintah dari BI ke Himbara, angka Credit-to-GDP Ratio Indonesia dipastikan akan naik. Dashboard ini akan menghitung selisih antara realisasi kredit tersebut dengan tren fundamentalnya ($Gap = Ratio_t - Trend_t$). Jika Gap menyentuh ambang batas tertentu, EWS akan memberikan sinyal bahwa stimulus tersebut mulai memicu risiko panas berlebih (overheating) pada sektor keuangan.
+3. **Sinergi Kebijakan Makroprudensial**: Proyek ini mensimulasikan peran analis data dalam membantu regulator (seperti BI dan OJK) serta manajemen risiko di bank besar (seperti Mandiri) untuk tetap waspada. Meskipun secara fiskal pemerintah memberikan "gas" melalui penempatan dana di Himbara, secara makroprudensial kita tetap membutuhkan "rem" berupa monitoring EWS yang akurat.
 """)
 
 # ======================
@@ -82,6 +96,68 @@ with col4:
     st.metric("Risk Level", risk_label)
 
 # ======================
+# SCENARIO ANALYSIS
+# ======================
+st.subheader("🧪 Scenario Analysis")
+
+# Kita ubah slidernya menjadi penambahan Percentage Points (pp) per tahun, bukan % majemuk.
+# Historisnya, kredit Indonesia paling naik/turun 1-3 pp per tahun.
+scenario_growth_pp = st.slider(
+    "Simulate ratio change (Percentage Points / year)",
+    -3.0, 5.0, 1.0, step=0.1
+)
+
+def simulate_credit_gap_linear(
+    current_ratio: float,
+    annual_change_pp: float,
+    periods: int,
+    trend_annual_change_pp: float = 0.5   # Historis tren jangka panjang tumbuhnya lambat
+) -> float:
+    """Project credit-to-GDP gap forward using linear percentage point changes."""
+    proj = current_ratio + (annual_change_pp * periods)
+    proj_trend = current_ratio + (trend_annual_change_pp * periods)
+    return proj - proj_trend
+
+# Hitung gap masa depan
+projected_gap = simulate_credit_gap_linear(
+    current_ratio=df["value"].iloc[-1],
+    annual_change_pp=scenario_growth_pp,
+    periods=forecast_horizon
+)
+
+if projected_gap > ews_threshold:
+    st.error(f"Projected gap {projected_gap:.2f}pp exceeds threshold!")
+else:
+    st.success(f"Projected gap {projected_gap:.2f}pp still safe.")
+    
+# ======================
+# PROPHET FORECAST
+# ======================
+forecast_df = run_forecast(df, forecast_horizon)
+
+last_date = int(df["date"].max())   # ✅ pastikan integer
+last_value = df[df["date"] == last_date]["value"].values[0]
+
+forecast_df["year"] = forecast_df["year"].astype(int)  # ✅ samakan tipe
+
+forecast_future = forecast_df[forecast_df["year"] > last_date]
+
+# Anchor titik awal dari 2024
+anchor = pd.DataFrame({
+    "year": [last_date],
+    "yhat": [last_value]
+})
+
+forecast_connected = pd.concat([anchor, forecast_future], ignore_index=True)
+
+try:
+    forecast_df = run_forecast(df, forecast_horizon)
+    forecast_df["year"] = forecast_df["year"].astype(int)
+except Exception as e:
+    st.error(f"Forecast error: {e}")
+    st.stop()
+    
+# ======================
 # CHART
 # ======================
 # fig, ax = plt.subplots(figsize=(10, 5))
@@ -112,65 +188,79 @@ with col4:
 
 # fig, ax = plt.subplots(figsize=(11, 5))
 
+# ======================
+# PLOTLY CHART
+# ======================
 import plotly.graph_objects as go
 
 fig = go.Figure()
 
 # ======================
-# VALUE LINE
+# ACTUAL
 # ======================
 fig.add_trace(go.Scatter(
     x=df["date"],
     y=df["value"],
-    name="Credit-to-GDP",
-    mode="lines+text",
+    name="Actual Credit",
+    mode="lines+markers+text",
     text=[f"{v:.1f}" for v in df["value"]],
     textposition="top center",
-    textfont=dict(size=15, color="white"),
-    line=dict(color="#1f77b4", width=3)
+    textfont=dict(size=11),
+    line=dict(color="#1f77b4", width=3),
 ))
 
 # ======================
-# TREND LINE
+# TREND
 # ======================
 fig.add_trace(go.Scatter(
     x=df["date"],
     y=df["trend"],
-    name="Trend",
-    # mode="lines",
-    line=dict(color="#ff7f0e", width=3, dash="dash")
+    name="Trend (HP Filter)",
+    mode="lines",
+    line=dict(color="#ff7f0e", width=3, dash="dash"),
 ))
 
 # ======================
-# ZERO LINE
+# PROPHET FORECAST (ONLY FUTURE)
 # ======================
-fig.add_hline(y=0, line_dash="dash", line_color="gray")
+# Ambil titik 2024 dari data aktual sebagai anchor
+anchor = pd.DataFrame({
+    "year": [last_date],
+    "yhat": [last_value]
+})
+
+# Gabungkan anchor + future forecast
+forecast_connected = pd.concat([anchor, forecast_future], ignore_index=True)
+
+# Plot dengan data yang sudah nyambung
+fig.add_trace(go.Scatter(
+    x=forecast_connected["year"],
+    y=forecast_connected["yhat"],
+    name="Forecast (Prophet)",
+    mode="lines+markers",
+    line=dict(color="cyan", width=4),
+))
 
 # ======================
-# LAYOUT (IMPORTANT)
+# FORECAST START LINE
 # ======================
-fig.update_layout(
-    title="Credit-to-GDP Gap vs Trend (EWS View)",
-    template="plotly_white",
-    hovermode="x unified",
-    height=500,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+fig.add_vline(
+    x=last_date,
+    line_dash="dash",
+    line_color="gray",
+    annotation_text="Forecast Start"
 )
 
 # ======================
-# SHOW IN STREAMLIT
+# LAYOUT
 # ======================
+fig.update_layout(
+    title="Credit-to-GDP with Trend & Forecast",
+    hovermode="x unified",
+    height=500
+)
+
 st.plotly_chart(fig, use_container_width=True)
-
-# fig, ax = plt.subplots()
-
-# ax.plot(df["date"], df["value"], label="Credit-to-GDP")
-# ax.plot(df["date"], df["trend"], label="Trend")
-# ax.axhline(y=0, linestyle="--")
-
-# ax.legend()
-
-# st.pyplot(fig)
 
 # ======================
 # COMPARISON ASEAN
@@ -189,7 +279,12 @@ peer_data = {
     "Malaysia": get_latest_gap("MYS"),
     "Thailand": get_latest_gap("THA"),
     "Philippines": get_latest_gap("PHL"),
-    "Vietnam": get_latest_gap("VNM")
+    "Vietnam": get_latest_gap("VNM"),
+    "Singapore": get_latest_gap("SGP"),
+    "Brunei": get_latest_gap("BRN"),
+    "Laos": get_latest_gap("LAO"),
+    "Myanmar": get_latest_gap("MMR"),
+    "Cambodia": get_latest_gap("KHM")
 }
 
 def color_rule(v):
@@ -243,49 +338,6 @@ fig.add_annotation(
 )
 
 st.plotly_chart(fig, use_container_width=True)
-
-# ======================
-# SCENARIO ANALYSIS
-# ======================
-st.subheader("🧪 Scenario Analysis")
-
-scenario_growth = st.slider(
-    "Simulate credit growth (%/year)",
-    -5.0, 30.0, 10.0
-)
-
-def simulate_credit_gap(
-    current_ratio: float,
-    growth_rate: float,
-    periods: int,
-    trend_growth: float = 5.0   # default: assume 5% annual trend growth
-) -> float:
-    """Project credit-to-GDP gap forward under a simulated growth rate.
-
-    Args:
-        current_ratio: current credit-to-GDP value (%)
-        growth_rate:   simulated annual credit growth rate (%)
-        periods:       number of years to project forward
-        trend_growth:  assumed trend growth rate (%) — default 5.0
-    """
-    proj = current_ratio * ((1 + growth_rate / 100) ** periods)
-    proj_trend = current_ratio * ((1 + trend_growth / 100) ** periods)
-    return proj - proj_trend
-
-projected_gap = simulate_credit_gap(
-    current_ratio=df["value"].iloc[-1],
-    growth_rate=scenario_growth,
-    periods=forecast_horizon
-)
-
-if projected_gap > ews_threshold:
-    st.error(
-        f"Projected gap {projected_gap:.2f}pp exceeds threshold!"
-    )
-else:
-    st.success(
-        f"Projected gap {projected_gap:.2f}pp still safe"
-    )
 
 # ======================
 # EWS TABLE
@@ -357,3 +409,11 @@ with st.expander("⚠️ EWS Signal Legend Table"):
 # ======================
 with st.expander("🔍 Show Raw Data"):
     st.dataframe(df)
+
+# ======================
+# SUMBER DATA
+# ======================  
+st.divider()
+st.caption("**Source**: [World Bank - Domestic credit to private sector (% of GDP)](https://data.worldbank.org/indicator/FS.AST.PRVT.GD.ZS)")
+st.caption("**Note**: Indicators are calculated based on the Hodrick-Prescott (HP) Filter methodology according to BIS standards.")
+st.caption("**Disclaimer**: Data as of 2024 and this Dashboard is for educational/analytical purpose and does not constitute financial advice")

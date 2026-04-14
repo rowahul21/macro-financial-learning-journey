@@ -17,7 +17,7 @@ def get_credit_to_gdp(country="IDN"):
 
 # 2. Hitung credit gap (HP Filter)
 def compute_credit_gap(df):
-    cycle, trend = hpfilter(df["value"], lamb=100)
+    cycle, trend = hpfilter(df["value"], lamb=1600)
     df["trend"] = trend
     df["gap"] = cycle
     return df
@@ -73,3 +73,33 @@ def add_ews_flag(df: pd.DataFrame, threshold: float = 2.0) -> pd.DataFrame:
     df["ews_label"] = df["ews"].map(label_map)
 
     return df
+
+# 4. Forecast
+from prophet import Prophet
+import pandas as pd
+
+def run_forecast(df, periods):
+    prophet_df = df[["date", "value"]].copy().rename(
+        columns={"date": "ds", "value": "y"}
+    )
+    
+    # ✅ Konversi integer year ke datetime (Prophet wajib datetime)
+    prophet_df["ds"] = pd.to_datetime(prophet_df["ds"], format="%Y")
+    
+    model = Prophet(
+        yearly_seasonality=False,
+        weekly_seasonality=False,
+        daily_seasonality=False,
+        changepoint_prior_scale=0.1,
+        growth="linear"
+    )
+    
+    model.fit(prophet_df)
+    
+    future = model.make_future_dataframe(periods=periods, freq="A")
+    forecast = model.predict(future)
+    
+    # ✅ Kembalikan sebagai integer year agar konsisten dengan df["date"]
+    forecast["year"] = forecast["ds"].dt.year
+    
+    return forecast[["year", "yhat", "yhat_lower", "yhat_upper"]]
